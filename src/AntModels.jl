@@ -1,6 +1,6 @@
 module AntModels
 
-export AntModelParameters, AntModel, run_ant_model, mm, s
+export AntModelParameters, AntModel, run_ant_model, mm, s, rad
 
 include("core.jl")
 

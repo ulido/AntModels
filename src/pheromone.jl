@@ -16,7 +16,7 @@ mutable struct Pheromone
     end
 end
 function Pheromone(width::Float64, height::Float64, Δx::Float64) # For testing only!
-    ph = Pheromone(width, height, 0.0, Δx, (_::Vector{Float64})->(0.0, (0.0, 0.0)), [])
+    ph = Pheromone(width, height, 0.0, Δx, (_::Vector{Float64})->(0.0, (0.0, 0.0)), Float64[])
     Nw = size(ph.amount[1],1)
     Nh = size(ph.amount[1],2)
     for s=16:15:Nw
