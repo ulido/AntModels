@@ -287,5 +287,5 @@ function run_ant_model(parameters::AntModelParameters; iteration_callbacks::Vect
         return df
     end
 
-    return df
+    return df, model
 end
