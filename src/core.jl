@@ -10,21 +10,33 @@ using Distributions
 include("pheromone.jl")
 include("speedprocess.jl")
 
+# Ant struct - this describes a single agent and inherits from Agents' AbstractAgent
+# The DomainType is a bit of a hack to allow method dispatch on if the type
+# of environment is an arena or a bridge.
 mutable struct Ant{DomainType} <: AbstractAgent
+    # id and pos fields are mandatory for Agents
     id::Int64
     pos::NTuple{2,Float64}
+    # Velocity vector
     vel::NTuple{2,Float64}
+    # Orientation angle
     theta::Float64
+    # This is so we can have ants that move at a continuous pace, or vary their
+    # velocity according to some process.
     speedprocess::SpeedProcess
+    # Is the ant stopped (i.e. an immovable obstacle)?
+    stopped::Bool
     function Ant{DomainType}(id::Int64, pos::NTuple{2,Float64}, theta::Real, speedprocess::SpeedProcess, time::Float64) where {DomainType}
-        new(id, pos, (0.0, 0.0), theta, copy(speedprocess, time))
+        new(id, pos, (0.0, 0.0), theta, copy(speedprocess, time), false)
     end
 end
 
+# Shortcuts for the units we use most.
 const mm = u"mm"
 const s = u"s"
 const rad = u"rad"
 
+# This describes the environment, size and type (i.e. :arena or :bridge).
 struct Domain
     width::typeof(1.0mm)
     height::typeof(1.0mm)
@@ -34,6 +46,25 @@ function Base.show(io::IO, d::Domain)
     print(io, "$(d.width)×$(d.height)[$(d.type)]")
 end
 
+"""
+    AntModelParameters(domain, v0, Dθ, γ, κ, Dc, Δx, S, L, β, Δt, T, pmodel, η, λ, ρ)
+
+Create a parameter struct for our simulations. The parameters are as follows:
+
+ * `domain`: a `Domain` instance. (default `Domain(100.0mm, 100.0mm, :bridge)`)
+ * `v0`: either the `SpeedProcess` the ants should use or a Unitful value of unit `mm/s` which assumes a constant speed process (default `15.5mm/s`).
+ * `Dθ`: orientation angle diffusion coefficient (default `0.38rad^2/s`).
+ * `γ`: pheromone-orientation interaction strength constant (default `0.0rad*mm/s`, i.e. pheromone is ignored).
+ * `κ`: pheromone-position interaction strength constant (default `0.0mm^2/s`, i.e. pheromone is ignored).
+ * `Dc`: pheromone diffusion coefficient (default `0.0mm^2/s`).
+ * `Δx`: pheromone PDE spatial discretization (default `0.1mm`).
+ * `S`: Ant-ant Morse force interaction strength (default `129.0mm^2/s`).
+ * `L`: Ant-ant Morse force interaction length (default `1.98mm`).
+ * `β`: Ant spawn rate - `add_ant!` is called according to a Poisson process with this rate (default `0.1/s`).
+ * `Δt`: simulation time step (default `0.04s`).
+ * `T`: simulation duration (default `100s`).
+ * `pmodel`: pher
+"""
 @with_kw struct AntModelParameters
     domain::Domain = Domain(100.0mm, 100.0mm, :bridge)
     v0::Union{SpeedProcess,typeof(1.0mm/s)} = 15.5mm/s
@@ -227,8 +258,10 @@ function ant_step!(ant::Ant, model::AntModel)
     ant.vel = ant.vel .+ (cos(θ), sin(θ)) .* v0
 
     # Update the ant's position with the current velocity vector plus an (optional) pheromone attraction
-    pos = pos .+ (dt .* ant.vel) .+ (κ .* attraction)
-
+    if !ant.stopped
+        pos = pos .+ (dt .* ant.vel) .+ (κ .* attraction)
+    end
+    
     # Update the direction angle with rotational Brownian motion
     θ = θ + η * randn() + γ * gradient_force
     if θ > π
