@@ -107,7 +107,7 @@ function ant_model(parameters::AntModelParameters)::AntModel
     spawn_rate = uconvert(s^-1, parameters.β).val
 
     # Create space and pheromone
-    space2d::ContinuousSpace = ContinuousSpace((width, height), 10.0, periodic=false)
+    space2d::ContinuousSpace = ContinuousSpace((width, height), 1.0, periodic=false)
 
     D = uconvert(mm^2/s, parameters.Dc).val
     η = uconvert(mm, parameters.η).val
@@ -261,7 +261,7 @@ function ant_step!(ant::Ant, model::AntModel)
     if !ant.stopped
         pos = pos .+ (dt .* ant.vel) .+ (κ .* attraction)
     end
-    
+
     # Update the direction angle with rotational Brownian motion
     θ = θ + η * randn() + γ * gradient_force
     if θ > π
