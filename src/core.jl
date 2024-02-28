@@ -87,6 +87,11 @@ Create a parameter struct for our simulations. The parameters are as follows:
 end
 const AntModel = AgentBasedModel{K,Ant{DomainType}} where {K,DomainType}
 
+struct Pillar
+    pos::NTuple{2,Float64}
+    radius::Float64
+end
+
 struct AntKilledException <: Exception
 end
 
@@ -133,6 +138,7 @@ function ant_model(parameters::AntModelParameters)::AntModel
             :interaction_scale => interaction_scale,
             :pheromone => pheromone,
             :time => 0.0,
+            :pillars => Pillar[],
         )
     )
     # model.properties[:neighbors] = (pos::NTuple{2,Float64}, r::Float64)->(model[id].pos for id in nearby_ids(pos, model, r))
@@ -173,6 +179,15 @@ function add_ant!(model::AntModel{<:AbstractSpace,:arena})
 end
 
 """
+    add_pillar!(model, pos, radius)
+
+Add a pillar (obstacle) at the given position and radius
+"""
+function add_pillar!(model::AntModel, pos::NTuple{2,Float64}, radius::Float64)
+    push!(model.pillars, Pillar(pos, radius))
+end
+
+"""
     model_step!(model)
 
 Perform a single ant model step.
@@ -202,6 +217,51 @@ function model_step!(model::AntModel)
         a1.vel = a1.vel .+ force
         a2.vel = a2.vel .- force
     end
+end
+
+function pillarcheck!(ant::Ant, pos::NTuple{2,Float64}, model::AntModel)::NTuple{2,Float64}
+    pillars::Array{Pillar,1} = model.pillars
+
+    for pillar in pillars
+        d = pos .- pillar.pos
+        r = hypot(d[1], d[2])
+        if r < pillar.radius
+#            println(ant.pos, pos, pillar.pos, r)
+            a = pos .- ant.pos
+            u = pos .- pillar.pos
+            asq = sum(a.^2)
+            usq = sum(u.^2)
+            ua = sum(u .* a)
+            ss = sqrt((pillar.radius^2 - usq + ua^2/asq)/asq)
+            t = ua/asq - ss
+            if ((t < 0) | (t > 1))
+                t = ua/asq + ss
+            end
+            if ((t < 0) | (t > 1))
+                println(ant.pos)
+                println(pos)
+                println(pillar.pos)
+                println(pillar.radius)
+                println(t)
+                throw(BoundsError("t out of bounds"))
+            end
+            oldpos = pos
+            pos = pos .- (a .* (t * (1.0 + 1e-8)))
+            d = pos .- pillar.pos
+            r = hypot(d[1], d[2])
+            if r < pillar.radius
+                println(ant.pos)
+                print(oldpos)
+                println(pos)
+                println(pillar.pos)
+                println(pillar.radius)
+                println(t)
+                throw(BoundsError("Inside pillar after check!"))
+            end
+        end
+    end
+
+    return pos
 end
 
 function boundarycheck!(ant::Ant{:bridge}, pos::NTuple{2,Float64}, model::AntModel)::NTuple{2,Float64}
@@ -281,6 +341,9 @@ function ant_step!(ant::Ant, model::AntModel)
             return pos
         end
     end
+
+    # Boundary around pillars
+    pos = pillarcheck!(ant, pos, model)
 
     # Add pheromone between the last and current ant positions
     addpheromone!(ph, ant.pos, pos)
