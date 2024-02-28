@@ -45,6 +45,8 @@ end
 function Base.show(io::IO, d::Domain)
     print(io, "$(d.width)×$(d.height)[$(d.type)]")
 end
+Base.isless(a::Domain, b::Domain) = a.height*a.width < b.height*b.width
+Base.isequal(a::Domain, b::Domain) = (a.height == b.height) && (a.width == b.width) && (a.type == b.type)
 
 """
     AntModelParameters(domain, v0, Dθ, γ, κ, Dc, Δx, S, L, β, Δt, T, pmodel, η, λ, ρ)
