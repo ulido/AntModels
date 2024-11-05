@@ -6,6 +6,7 @@ using Unitful
 import Unitful: 𝐋, 𝐓
 using DataFrames
 using Distributions
+using LinearAlgebra
 
 include("pheromone.jl")
 include("speedprocess.jl")
@@ -26,8 +27,9 @@ mutable struct Ant{DomainType} <: AbstractAgent
     speedprocess::SpeedProcess
     # Is the ant stopped (i.e. an immovable obstacle)?
     stopped::Bool
-    function Ant{DomainType}(id::Int64, pos::NTuple{2,Float64}, theta::Real, speedprocess::SpeedProcess, time::Float64) where {DomainType}
-        new(id, pos, (0.0, 0.0), theta, copy(speedprocess, time), false)
+    L::Float64
+    function Ant{DomainType}(id::Int64, pos::NTuple{2,Float64}, theta::Real, speedprocess::SpeedProcess, time::Float64, L::Float64) where {DomainType}
+        new(id, pos, (0.0, 0.0), theta, copy(speedprocess, time), false, L)
     end
 end
 
@@ -169,13 +171,13 @@ function add_ant!(model::AntModel{<:AbstractSpace,:bridge})
     side = rand() > 0.5
     x = (e[1]*0.99*side, e[2]*rand())
     θ = π*side
-    add_agent!(x, model, θ, model.speed, model.time)
+    add_agent!(x, model, θ, model.speed, model.time, model.interaction_scale)
 end
 function add_ant!(model::AntModel{<:AbstractSpace,:arena})
     e::NTuple{2,Float64} = model.space.extent
     x = e ./ 2 .+ (rand() - 0.5, rand() - 0.5)
     θ = 2π*rand()
-    add_agent!(x, model, θ, model.speed, model.time)
+    add_agent!(x, model, θ, model.speed, model.time, model.interaction_scale)
 end
 
 """
@@ -212,7 +214,13 @@ function model_step!(model::AntModel)
     for (a1, a2) in interacting_pairs(model, 10.0*L, :all)
         d::NTuple{2,Float64} = a2.pos .- a1.pos
         r::Float64 = hypot(d[1], d[2])
-        fr::Float64 = -S*exp(-r/L)/(L*r)
+        Li::Float64 = L
+        if (a1.stopped)
+            Li = a1.L
+        elseif (a2.stopped)
+            Li = a2.L
+        end
+        fr::Float64 = -S*exp(-r/Li)/(Li*r)
         force::NTuple{2,Float64} = d .* fr
         a1.vel = a1.vel .+ force
         a2.vel = a2.vel .- force
@@ -237,27 +245,15 @@ function pillarcheck!(ant::Ant, pos::NTuple{2,Float64}, model::AntModel)::NTuple
             if ((t < 0) | (t > 1))
                 t = ua/asq + ss
             end
-            if ((t < 0) | (t > 1))
-                println(ant.pos)
-                println(pos)
-                println(pillar.pos)
-                println(pillar.radius)
-                println(t)
-                throw(BoundsError("t out of bounds"))
-            end
             oldpos = pos
             pos = pos .- (a .* (t * (1.0 + 1e-8)))
-            d = pos .- pillar.pos
-            r = hypot(d[1], d[2])
-            if r < pillar.radius
-                println(ant.pos)
-                print(oldpos)
-                println(pos)
-                println(pillar.pos)
-                println(pillar.radius)
-                println(t)
-                throw(BoundsError("Inside pillar after check!"))
-            end
+
+            n = oldpos .- pos 
+            u = pillar.pos .- pos
+            a = n .- (dot(n,u) .* u)
+            ant.theta = atan(a[2], a[1])
+
+            break  # We assume pillars do not overlap!
         end
     end
 

@@ -44,6 +44,25 @@ end
     @test (a2.pos[1] - a1.pos[1]) ≈ d∞
 end
 
+@testset "Pillars" begin
+    parameters = AntModelParameters(
+        domain=Domain(170.0mm, 10mm, :bridge),
+        v0=AntModels.ConstantSpeedProcess(15.5),
+        Dθ=0.38rad^2/s,
+        L=2*1.98mm,
+        β=0/s,
+        T=100s,
+        Δt=0.01s
+    )
+
+    model = AntModels.ant_model(parameters)
+    AntModels.add_pillar!(m, (100.0, 5.0), 1.0)
+    
+    a = AntModels.add_agent!((100.0, 3.9), model, 0.0)
+    println(AntModels.pillarcheck!(a, (100.0, 4.1), m))
+    println(a)
+end
+
 # @testset "Pheromone" begin
 #     parameters = AntModelParameters(
 #         width = 100.0mm,
