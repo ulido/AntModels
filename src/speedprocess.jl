@@ -6,6 +6,7 @@ struct ConstantSpeedProcess <: SpeedProcess
     μ::Float64
 end
 Base.copy(sp::ConstantSpeedProcess, time::Float64) = ConstantSpeedProcess(sp.μ)
+Base.isless(a::ConstantSpeedProcess, b::ConstantSpeedProcess) = a.μ < b.μ
 function Base.show(io::IO, p::ConstantSpeedProcess)
     print(io, "Const(μ=$(p.μ))")
 end
