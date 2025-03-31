@@ -3,7 +3,7 @@ import Agents: AbstractSpace
 using ProgressLogging
 using Parameters
 using Unitful
-import Unitful: 𝐋, 𝐓
+import Unitful: 𝐋, 𝐓, mm, s, rad
 using DataFrames
 using Distributions
 using LinearAlgebra
@@ -12,14 +12,7 @@ include("pheromone.jl")
 include("speedprocess.jl")
 
 # Ant struct - this describes a single agent and inherits from Agents' AbstractAgent
-# The DomainType is a bit of a hack to allow method dispatch on if the type
-# of environment is an arena or a bridge.
-mutable struct Ant{DomainType} <: AbstractAgent
-    # id and pos fields are mandatory for Agents
-    id::Int64
-    pos::NTuple{2,Float64}
-    # Velocity vector
-    vel::NTuple{2,Float64}
+@agent struct Ant(ContinuousAgent{2, Float64})
     # Orientation angle
     theta::Float64
     # This is so we can have ants that move at a continuous pace, or vary their
@@ -27,16 +20,15 @@ mutable struct Ant{DomainType} <: AbstractAgent
     speedprocess::SpeedProcess
     # Is the ant stopped (i.e. an immovable obstacle)?
     stopped::Bool
-    L::Float64
-    function Ant{DomainType}(id::Int64, pos::NTuple{2,Float64}, theta::Real, speedprocess::SpeedProcess, time::Float64, L::Float64) where {DomainType}
-        new(id, pos, (0.0, 0.0), theta, copy(speedprocess, time), false, L)
+    function Ant(id::Int64, pos::SVector{2,Float64}, theta::Real, speedprocess::SpeedProcess, time::Float64)
+        new(id, pos, (0.0, 0.0), theta, copy(speedprocess, time), false)
     end
 end
 
 # Shortcuts for the units we use most.
-const mm = u"mm"
-const s = u"s"
-const rad = u"rad"
+# const mm = u"mm"
+# const s = u"s"
+# const rad = u"rad"
 
 # This describes the environment, size and type (i.e. :arena or :bridge).
 struct Domain
@@ -86,12 +78,13 @@ Create a parameter struct for our simulations. The parameters are as follows:
     η::typeof(1.0mm) = 1.0mm
     λ::typeof(1.0mm) = 1.0mm
     ρ::typeof(1.0mm) = 1.0mm
+    stop_when_no_ants_left::Bool = false
 end
-const AntModel = AgentBasedModel{K,Ant{DomainType}} where {K,DomainType}
 
 struct Pillar
-    pos::NTuple{2,Float64}
+    pos::SVector{2,Float64}
     radius::Float64
+    strength::Float64
 end
 
 struct AntKilledException <: Exception
@@ -102,7 +95,7 @@ end
 
 Create and return a new ant model object with the given `parameters`.
 """
-function ant_model(parameters::AntModelParameters)::AntModel
+function ant_model(parameters::AntModelParameters)
     # Extract parameters into variable (can't use unpack unfortunately)
     width = uconvert(mm, parameters.domain.width).val
     height = uconvert(mm, parameters.domain.height).val
@@ -116,7 +109,7 @@ function ant_model(parameters::AntModelParameters)::AntModel
     spawn_rate = uconvert(s^-1, parameters.β).val
 
     # Create space and pheromone
-    space2d::ContinuousSpace = ContinuousSpace((width, height), spacing=1.0, periodic=false)
+    space2d::ContinuousSpace = Agents.ContinuousSpace((width, height), spacing=1.0, periodic=false)
 
     D = uconvert(mm^2/s, parameters.Dc).val
     η = uconvert(mm, parameters.η).val
@@ -126,9 +119,9 @@ function ant_model(parameters::AntModelParameters)::AntModel
     pheromone = Pheromone{parameters.pmodel}(width, height, D, Δx, η, [λ, ρ])
 
     # Create model
-    model::AntModel = ABM(
-        Ant{parameters.domain.type},
-        space2d,
+    model = StandardABM(
+        Ant,
+        space2d;
         properties = Dict(
             :dt => time_step,
             :spawn_distribution => Poisson(time_step*spawn_rate),
@@ -141,9 +134,11 @@ function ant_model(parameters::AntModelParameters)::AntModel
             :pheromone => pheromone,
             :time => 0.0,
             :pillars => Pillar[],
-        )
+            :stop_when_no_ants_left => parameters.stop_when_no_ants_left,
+        ),
+        agent_step! = ant_step!,
+        model_step! = model_step!,
     )
-    # model.properties[:neighbors] = (pos::NTuple{2,Float64}, r::Float64)->(model[id].pos for id in nearby_ids(pos, model, r))
 
     # Add the first ant.
     if spawn_rate > 0
@@ -166,18 +161,12 @@ end
 
 Add a single ant at a random y position at the left or right end of the bridge.
 """
-function add_ant!(model::AntModel{<:AbstractSpace,:bridge})
-    e::NTuple{2,Float64} = model.space.extent
+function add_ant!(model)
+    e::SVector{2,Float64} = spacesize(model)
     side = rand() > 0.5
-    x = (e[1]*0.99*side, e[2]*rand())
+    x = SVector(e[1]*0.99*side, e[2]*rand())
     θ = π*side
-    add_agent!(x, model, θ, model.speed, model.time, model.interaction_scale)
-end
-function add_ant!(model::AntModel{<:AbstractSpace,:arena})
-    e::NTuple{2,Float64} = model.space.extent
-    x = e ./ 2 .+ (rand() - 0.5, rand() - 0.5)
-    θ = 2π*rand()
-    add_agent!(x, model, θ, model.speed, model.time, model.interaction_scale)
+    add_agent!(x, model, θ, model.speed, model.time)
 end
 
 """
@@ -185,8 +174,8 @@ end
 
 Add a pillar (obstacle) at the given position and radius
 """
-function add_pillar!(model::AntModel, pos::NTuple{2,Float64}, radius::Float64)
-    push!(model.pillars, Pillar(pos, radius))
+function add_pillar!(model, pos::SVector{2,Float64}, radius::Float64, strength::Float64)
+    push!(model.pillars, Pillar(pos, radius, strength))
 end
 
 """
@@ -194,7 +183,7 @@ end
 
 Perform a single ant model step.
 """
-function model_step!(model::AntModel)
+function model_step!(model)
     # Perform pheromone diffusion
     model.time += model.dt
     steppheromone!(model.pheromone, model.time)
@@ -212,60 +201,37 @@ function model_step!(model::AntModel)
     L::Float64 = model.interaction_scale
 
     for (a1, a2) in interacting_pairs(model, 10.0*L, :all)
-        d::NTuple{2,Float64} = a2.pos .- a1.pos
+        d::SVector{2,Float64} = a2.pos .- a1.pos
         r::Float64 = hypot(d[1], d[2])
-        Li::Float64 = L
-        if (a1.stopped)
-            Li = a1.L
-        elseif (a2.stopped)
-            Li = a2.L
-        end
-        fr::Float64 = -S*exp(-r/Li)/(Li*r)
-        force::NTuple{2,Float64} = d .* fr
+        fr::Float64 = -S*exp(-r/L)/(L*r)
+        force::SVector{2,Float64} = d .* fr
         a1.vel = a1.vel .+ force
         a2.vel = a2.vel .- force
     end
-end
 
-function pillarcheck!(ant::Ant, pos::NTuple{2,Float64}, model::AntModel)::NTuple{2,Float64}
-    pillars::Array{Pillar,1} = model.pillars
-
+    pillars::Vector{Pillar} = model.pillars
     for pillar in pillars
-        d = pos .- pillar.pos
-        r = hypot(d[1], d[2])
-        if r < pillar.radius
-#            println(ant.pos, pos, pillar.pos, r)
-            a = pos .- ant.pos
-            u = pos .- pillar.pos
-            asq = sum(a.^2)
-            usq = sum(u.^2)
-            ua = sum(u .* a)
-            ss = sqrt((pillar.radius^2 - usq + ua^2/asq)/asq)
-            t = ua/asq - ss
-            if ((t < 0) | (t > 1))
-                t = ua/asq + ss
+        R::Float64 = pillar.radius
+        Sp::Float64 = pillar.strength
+        pos::SVector{2,Float64} = pillar.pos
+        for a in allagents(model)
+            d::SVector{2,Float64} = a.pos .- pos
+            r::Float64 = hypot(d[1], d[2])
+            if r < 10.0*R
+                fr::Float64 = -Sp*exp(-r/R)/(R*r)
+                force::SVector{2,Float64} = d .* fr
+                a.vel = a.vel .- force
             end
-            oldpos = pos
-            pos = pos .- (a .* (t * (1.0 + 1e-8)))
-
-            n = oldpos .- pos 
-            u = pillar.pos .- pos
-            a = n .- (dot(n,u) .* u)
-            ant.theta = atan(a[2], a[1])
-
-            break  # We assume pillars do not overlap!
         end
     end
-
-    return pos
 end
 
-function boundarycheck!(ant::Ant{:bridge}, pos::NTuple{2,Float64}, model::AntModel)::NTuple{2,Float64}
-    extent::NTuple{2,Float64} = model.space.extent
+function boundarycheck!(ant, pos::SVector{2,Float64}, model)::SVector{2,Float64}
+    extent::SVector{2,Float64} = spacesize(model)
 
     # Kill the ant if it moves outside the bridge bounds left and right
     if (pos[1] < 0.0) | (pos[1] > extent[1])
-        kill_agent!(ant, model)
+        remove_agent!(ant, model)
         throw(AntKilledException())
     end
 
@@ -280,23 +246,13 @@ function boundarycheck!(ant::Ant{:bridge}, pos::NTuple{2,Float64}, model::AntMod
 
     return pos
 end
-function boundarycheck!(ant::Ant{:arena}, pos::NTuple{2,Float64}, model::AntModel)::NTuple{2,Float64}
-    extent::NTuple{2,Float64} = model.space.extent
-
-    # Kill the ant if it leaves the arena
-    if any(pos .< 0) | any(pos .> extent)
-        kill_agent!(ant, model)
-        throw(AntKilledException())
-    end
-    return pos
-end
 
 """
     ant_step!(ant, model)
 
 Perform a single ant's step. This needs to be called *after* `model_step!`.
 """
-function ant_step!(ant::Ant, model::AntModel)
+function ant_step!(ant, model)
     η::Float64 = model.angle_stepsize
     γ::Float64 = model.gammadt
     κ::Float64 = model.kappadt
@@ -338,9 +294,6 @@ function ant_step!(ant::Ant, model::AntModel)
         end
     end
 
-    # Boundary around pillars
-    pos = pillarcheck!(ant, pos, model)
-
     # Add pheromone between the last and current ant positions
     addpheromone!(ph, ant.pos, pos)
 
@@ -356,21 +309,36 @@ end
 Run the ant model with the given parameters and return the collected ant trajectories.
 Optionally, a list of callback functions can be given which are then called at each time step.
 """
-function run_ant_model(parameters::AntModelParameters; iteration_callbacks::Vector{T} = Function[], showprogress = true) where {T <: Function}
+function run_ant_model(parameters::AntModelParameters; initialization_callbacks::Vector{S} = Function[], iteration_callbacks::Vector{T} = Function[], showprogress = true) where {T <: Function, S <: Function}
     # Create new ant (agents) model
     model = ant_model(parameters)
     number_of_steps::Int64 = ceil(Int64, parameters.T / parameters.Δt)
+    local stop_condition::Union{Int, Function}
+    if model.stop_when_no_ants_left
+        function until(m::StandardABM, t::Int)
+            stopped = map((a) -> !a.stopped, allagents(m))
+            return (sum(stopped) == 0) | (t >= number_of_steps)
+        end
+        stop_condition = until
+    else
+        stop_condition = number_of_steps
+    end
 
     # Prepare data collection
     position_x(a) = a.pos[1]
     position_y(a) = a.pos[2]
-    adata = [position_x, position_y, :theta]
+    adata = [position_x, position_y, :theta, :stopped]
+
+    # Run initialization callbacks
+    for f in initialization_callbacks
+        f(model, s)
+    end
 
     # This strange construct allows us to display a progress bar when using Agents' `run!` function.
     # The `when_model` function argument to `run!` is called at each iteration, so we just use it to
     # update the progress bar. We can also call an optional call back function to e.g. animate our simulation.
     df = ProgressLogging.progress() do id
-        function when_model(m::AntModel, s::Int64)::Bool
+        function when_model(m, s::Int64)::Bool
             # Update progress bar
             if showprogress
                 @info "stepping ants" progress=s/number_of_steps _id=id
@@ -383,7 +351,7 @@ function run_ant_model(parameters::AntModelParameters; iteration_callbacks::Vect
             # Always return false - we don't want to collect model data.
             return false
         end
-        df, _ = run!(model, ant_step!, model_step!, number_of_steps, adata = adata, when_model = when_model)
+        df, _ = run!(model, stop_condition, adata = adata, when_model = when_model)
         return df
     end
 

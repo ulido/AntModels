@@ -71,7 +71,7 @@ function drawgaussianline!(img::Array{Float64,2}, a::NTuple{2,Int64}, b::NTuple{
         end
     end
 end
-function addpheromone!(p::Pheromone{<:Any}, oldpos::NTuple{2,Float64}, pos::NTuple{2,Float64})
+function addpheromone!(p::Pheromone{<:Any}, oldpos::SVector{2,Float64}, pos::SVector{2,Float64})
     xn, yn = pos
     n = (trunc(Int64, xn / p.Δx) + 2, trunc(Int64, yn / p.Δx) + 2)
     xo, yo = oldpos
@@ -101,7 +101,7 @@ function steppheromone!(p::Pheromone{<:Any})
     p.time += p.Δt
 end
 
-function localgradient(p::Pheromone{<:Any}, pos::NTuple{2,Float64}, radius::Float64)::NTuple{2,Float64}
+function localgradient(p::Pheromone{<:Any}, pos::SVector{2,Float64}, radius::Float64)::SVector{2,Float64}
     x, y = pos
     N = 0
     s = (0.0, 0.0)
@@ -113,7 +113,7 @@ function localgradient(p::Pheromone{<:Any}, pos::NTuple{2,Float64}, radius::Floa
     end
     return s ./ N
 end
-function bilinear_interp(::Type{T}, f::Function, pos::NTuple{2,Float64}, Δx::Float64)::T where {T}
+function bilinear_interp(::Type{T}, f::Function, pos::SVector{2,Float64}, Δx::Float64)::T where {T}
     x, y = pos
     il = floor(Int64, x / Δx) + 2
     jl = floor(Int64, y / Δx) + 2
@@ -131,8 +131,8 @@ function bilinear_interp(::Type{T}, f::Function, pos::NTuple{2,Float64}, Δx::Fl
 
     return v
 end
-function localgradient(p::Pheromone{<:Any}, pos::NTuple{2,Float64})::NTuple{2,Float64}
-    return bilinear_interp(NTuple{2,Float64}, (i::Int64, j::Int64)->localgradient(p, i, j), pos, p.Δx)
+function localgradient(p::Pheromone{<:Any}, pos::SVector{2,Float64})::SVector{2,Float64}
+    return bilinear_interp(SVector{2,Float64}, (i::Int64, j::Int64)->localgradient(p, i, j), pos, p.Δx)
     # x, y = pos
     # i = trunc(Int64, x / p.Δx) + 2
     # j = trunc(Int64, y / p.Δx) + 2
@@ -160,7 +160,7 @@ end
 
 #     return (dx, dy)
 # end
-function localgradient(p::Pheromone{<:Any}, i::Int64, j::Int64)::NTuple{2,Float64}
+function localgradient(p::Pheromone{<:Any}, i::Int64, j::Int64)::SVector{2,Float64}
     c = p.amount[1]
 
     if (i < 2) | (j < 2) | (i > size(c,1)-1) | (j > size(c,2)-1)
@@ -172,9 +172,9 @@ function localgradient(p::Pheromone{<:Any}, i::Int64, j::Int64)::NTuple{2,Float6
     dy = ((c[i+1, j+1] + 4*c[i, j+1] + c[i-1, j+1]) -
           (c[i+1, j-1] + 4*c[i, j-1] + c[i-1, j-1]))/(p.Δx*12.0)
 
-    return (dx, dy)
+    return SVector(dx, dy)
 end
-function Base.getindex(p::Pheromone{<:Any}, pos::NTuple{2,Float64})::Float64
+function Base.getindex(p::Pheromone{<:Any}, pos::SVector{2,Float64})::Float64
     c = p.amount[1]
     function access(i::Int64, j::Int64)::Float64
         if (i < 2) | (j < 2) | (i > size(c,1)-1) | (j > size(c,2)-1)
@@ -201,7 +201,7 @@ The type of interaction is determined by `T` in `Ant{T}` and can be `:perna`, `:
 `:gradient_nonlocal` or `:gradient_attraction`.
 """
 # Pheromone interaction model according to Perna et al
-function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromone{:perna})::Tuple{Float64,NTuple{2,Float64}}
+function pheromone_interaction(pos::SVector{2,Float64}, θ::Float64, ph::Pheromone{:perna})::Tuple{Float64,SVector{2,Float64}}
     dir = (cos(θ), sin(θ))
     perp = (-dir[2], dir[1])
     λ = ph.interaction_parameters[1]
@@ -214,17 +214,17 @@ function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromon
     else
         gradient_force = 0.0
     end
-    return (gradient_force, (0.0, 0.0))
+    return (gradient_force, SVector(0.0, 0.0))
 end
 # Pheromone interaction model - takes the gradient at the ant position only
-function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromone{:gradient})::Tuple{Float64,NTuple{2,Float64}}
+function pheromone_interaction(pos::SVector{2,Float64}, θ::Float64, ph::Pheromone{:gradient})::Tuple{Float64,SVector{2,Float64}}
     localgrad = localgradient(ph, pos)
     n = (-sin(θ), cos(θ))
     gradient_force = sum(n .* localgrad)
-    return (gradient_force, (0.0, 0.0))
+    return (gradient_force, SVector(0.0, 0.0))
 end
 # Pheromone interaction model - takes the gradient half an ant length in front of the ant
-function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromone{:gradient_nonlocal})::Tuple{Float64,NTuple{2,Float64}}
+function pheromone_interaction(pos::SVector{2,Float64}, θ::Float64, ph::Pheromone{:gradient_nonlocal})::Tuple{Float64,SVector{2,Float64}}
     dir = (cos(θ), sin(θ))
     perp = (-dir[2], dir[1])
     λ = ph.interaction_parameters[1]
@@ -237,10 +237,10 @@ function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromon
     else
         gradient_force = 0.0
     end
-    return (gradient_force, (0.0, 0.0))
+    return (gradient_force, SVector(0.0, 0.0))
 end
 # Pheromone interaction model - takes the gradient and adds an positional attraction force
-function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromone{:gradient_attraction})::Tuple{Float64,NTuple{2,Float64}}
+function pheromone_interaction(pos::SVector{2,Float64}, θ::Float64, ph::Pheromone{:gradient_attraction})::Tuple{Float64,SVector{2,Float64}}
     dir = (cos(θ), sin(θ))
 
     localgrad = localgradient(ph, pos)
@@ -248,6 +248,6 @@ function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromon
     return (gradient_force, localgrad)
 end
 # No pheromone interaction model
-function pheromone_interaction(pos::NTuple{2,Float64}, θ::Float64, ph::Pheromone{:nopheromone})::Tuple{Float64,NTuple{2,Float64}}
-    return (0.0, (0.0, 0.0))
+function pheromone_interaction(pos::SVector{2,Float64}, θ::Float64, ph::Pheromone{:nopheromone})::Tuple{Float64,SVector{2,Float64}}
+    return (0.0, SVector(0.0, 0.0))
 end
